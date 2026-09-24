@@ -5,16 +5,25 @@
     "prefer-stable": true,
     "require": {
         "php": ">=8.4",
+        "ext-bcmath": "*",
         "ext-ctype": "*",
         "ext-iconv": "*",
+        "ext-intl": "*",
+        "ext-pdo_pgsql": "*",
+        "ext-redis": "*",
         "doctrine/doctrine-bundle": "^3.3",
         "doctrine/doctrine-migrations-bundle": "^4.0",
         "doctrine/orm": "^3.7",
-        "predis/predis": "^3.6",
+        "moneyphp/money": "^4.9",
+        "symfony/clock": "8.1.*",
         "symfony/console": "8.1.*",
         "symfony/dotenv": "8.1.*",
         "symfony/flex": "^2",
         "symfony/framework-bundle": "8.1.*",
+        "symfony/lock": "8.1.*",
+        "symfony/messenger": "8.1.*",
+        "symfony/monolog-bundle": "^4.1",
+        "symfony/redis-messenger": "8.1.*",
         "symfony/runtime": "8.1.*",
         "symfony/serializer": "8.1.*",
         "symfony/uid": "8.1.*",
@@ -67,18 +76,23 @@
         "lint": "php-cs-fixer fix --dry-run --diff --verbose",
         "stan": "phpstan analyse",
         "test": "phpunit",
-        "check": ["@lint", "@stan", "@test"]
+        "check": [
+            "@lint",
+            "@stan",
+            "@test"
+        ]
     },
     "conflict": {
         "symfony/symfony": "*"
     },
     "extra": {
         "symfony": {
-            "allow-contrib": false,
+            "allow-contrib": "true",
             "require": "8.1.*"
         }
     },
     "require-dev": {
+        "dama/doctrine-test-bundle": "^8.6",
         "friendsofphp/php-cs-fixer": "^3.95",
         "opis/json-schema": "^2.6",
         "phpstan/extension-installer": "^1.4",
@@ -87,6 +101,7 @@
         "phpstan/phpstan-symfony": "^2.0",
         "phpunit/phpunit": "^13.3",
         "symfony/browser-kit": "8.1.*",
-        "symfony/css-selector": "8.1.*"
+        "symfony/css-selector": "8.1.*",
+        "symfony/process": "8.1.*"
     }
 }

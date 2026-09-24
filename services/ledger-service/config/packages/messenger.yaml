@@ -1,0 +1,7 @@
+framework:
+    messenger:
+        transports:
+            ledger_events:
+                dsn: '%env(LEDGER_EVENTS_TRANSPORT_DSN)%'
+                serializer: messenger.transport.symfony_serializer
+        routing: { }

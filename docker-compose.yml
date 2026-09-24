@@ -1,1 +1,59 @@
-services: 3.8
+name: ledger-platform
+
+x-ledger-service: &ledger-service
+  build:
+    context: ./services/ledger-service
+    target: dev
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  volumes:
+    - ./services/ledger-service:/app
+    - ./contracts:/contracts:ro
+  environment:
+    DATABASE_URL: postgresql://ledger:ledger@postgres:5432/ledger?serverVersion=16&charset=utf8
+    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events
+    CONTRACTS_DIR: /contracts
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  ledger-service:
+    <<: *ledger-service
+    ports:
+      - "8081:80"
+
+  ledger-outbox-relay:
+    <<: *ledger-service
+    command: ["php", "bin/console", "ledger:outbox:relay", "--loop"]
+    restart: unless-stopped
+    # Enabled by default once the relay command exists (Task 11).
+    profiles: ["relay"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:

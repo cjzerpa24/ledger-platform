@@ -6,3 +6,10 @@ parameters:
         - public/
         - src/
         - tests/
+    symfony:
+        containerXmlPath: var/cache/dev/App_KernelDevDebugContainer.xml
+    ignoreErrors:
+        # Overrides a private KernelTrait method that the trait itself calls.
+        -
+            identifier: method.unused
+            path: src/Kernel.php
