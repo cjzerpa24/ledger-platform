@@ -9,7 +9,7 @@ use App\Application\Port\TransactionManager;
 use App\Domain\Account\Account;
 use App\Domain\Account\AccountRepository;
 use App\Domain\Shared\SupportedCurrencies;
-use Psr\Clock\ClockInterface;
+use App\Application\Port\Clock;
 use Symfony\Component\Uid\Uuid;
 
 final class OpenAccountHandler
@@ -18,7 +18,7 @@ final class OpenAccountHandler
         private readonly AccountRepository $accounts,
         private readonly TransactionManager $transactions,
         private readonly EventPublisher $events,
-        private readonly ClockInterface $clock,
+        private readonly Clock $clock,
     ) {}
 
     public function handle(OpenAccountCommand $command): AccountView
