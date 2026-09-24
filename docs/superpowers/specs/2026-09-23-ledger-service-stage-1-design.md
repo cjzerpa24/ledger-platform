@@ -40,6 +40,7 @@ Stage 1 is done when:
 | D10 | Runtime | A single Alpine image: `php:8.4-fpm-alpine` plus nginx under supervisord, with nginx on port 80. |
 | D11 | Redis client | The phpredis extension (`ext-redis`), required by `symfony/redis-messenger`. `predis/predis` is removed. |
 | D12 | Naming | Avoid "Transaction" as a domain term, because it collides with DB transactions. |
+| D13 | Money values | `moneyphp/money` v4 (`Money\Money`, `Money\Currency`), stored as minor-unit bigint plus a currency code. |
 
 ## 3. Architecture
 
@@ -47,8 +48,8 @@ Layered (ports and adapters) within one Symfony app, under the `App\` namespace:
 
 ```
 src/
-  Domain/                     # business rules; depends on nothing but Doctrine attributes and symfony/uid
-    Shared/                   # Money, Currency, DomainEvent, RecordsEvents, LedgerException
+  Domain/                     # business rules; depends only on Doctrine attributes, symfony/uid, moneyphp/money
+    Shared/                   # SupportedCurrencies, MoneyParser, MoneyFormatter, DomainEvent, RecordsEvents, LedgerException
     Account/                  # Account, AccountType, AccountStatus, AccountRepository, exceptions
     Ledger/                   # JournalEntry, Posting, Direction, JournalEntryRepository, exceptions
     Transfer/                 # Transfer, TransferKind, TransferStatus, TransferRepository, events, exceptions
@@ -83,21 +84,25 @@ are removed. `config/packages/doctrine.yaml` maps
 
 ### 4.1 Shared kernel
 
-- **`Currency`** is a `final readonly` value object with `code` (ISO-4217,
-  uppercase) and `minorUnits` (exponent). Instances come from a supported
-  list: USD 2, EUR 2, GBP 2, TZS 2, JPY 0. An unknown code throws
-  `UnsupportedCurrency`. It is persisted as a 3-character string column.
-- **`Money`** is a `final readonly` value object with `int $minor` and
-  `Currency $currency`, mapped as an `#[ORM\Embeddable]` with columns
-  `*_minor` (bigint) and `*_currency` (char 3).
-  - `Money::fromDecimalString(string, Currency)` parses exactly, with no
-    floats. It accepts `^\d+(\.\d+)?$`, rejects more fraction digits than
-    `minorUnits`, and rejects zero or negative amounts where amounts must be
-    positive (via a separate `positive()` guard).
-  - `toDecimalString()` formats for output.
-  - `add()`, `subtract()`, `negate()`, `isNegative()`, `isZero()`,
-    `equals()`, `compare()`.
-  - Operations across different currencies throw `CurrencyMismatch`.
+- **Money values use `moneyphp/money` (v4)**: `Money\Money` (amount held as a
+  numeric string of minor units, bcmath arithmetic) and `Money\Currency`.
+  There is no in-house `Money` class; see ADR 0007.
+- **`SupportedCurrencies`** wraps a `Money\Currencies\CurrencyList` with
+  USD 2, EUR 2, GBP 2, TZS 2 and JPY 0. `SupportedCurrencies::get(string
+  $code): Currency` throws `UnsupportedCurrency` for anything else, and
+  `minorUnits(Currency)` exposes the exponent.
+- **`MoneyParser`** (a domain service, `Domain/Shared`) wraps
+  `DecimalMoneyParser`. `parsePositive(string $decimal, Currency): Money`
+  accepts only `^\d+(\.\d+)?$`, rejects more fraction digits than the
+  currency allows, and rejects zero, all with `InvalidAmount`.
+- **`MoneyFormatter`** wraps `DecimalMoneyFormatter`. `format(Money): string`
+  produces `"50.00"`, or `"1200"` for JPY.
+- **Persistence:** entities hold scalar columns (`*_minor` bigint plus
+  `*_currency` char 3) and expose `Money` through getters that rebuild it.
+  Custom Doctrine types and embeddables aren't used.
+- **Currency guard:** before any arithmetic, domain code checks
+  `$a->isSameCurrency($b)` and throws `CurrencyMismatch`, so MoneyPHP's
+  generic `InvalidArgumentException` never reaches callers.
 - **`DomainEvent`** is an interface with `eventName(): string`,
   `eventVersion(): int`, `aggregateId(): Uuid`, `occurredAt():
   DateTimeImmutable` and `payload(): array<string, mixed>`.
@@ -114,9 +119,9 @@ IDs are `Symfony\Component\Uid\Uuid` (v7, generated in the domain via
 `Account` fields:
 - `id`, `name`
 - `type: AccountType` (`CUSTOMER`, `SETTLEMENT`)
-- `currency: Currency`
+- `currency` (char 3, exposed as `Money\Currency`)
 - `status: AccountStatus` (`ACTIVE`, `FROZEN`, `CLOSED`)
-- `balance: Money` (the cache)
+- `balance` (the cache): `balance_minor` plus the account's `currency`, exposed as `Money`
 - `version: int` (`#[ORM\Version]`)
 - `createdAt`, `updatedAt` (`DateTimeImmutable`)
 
@@ -156,8 +161,8 @@ migration.
     - every amount positive
     - total debits equal total credits
 - **`Posting`** fields: `id`, `journalEntry` (ManyToOne), `accountId` (Uuid,
-  indexed), `direction`, `amount: Money`, `balanceAfter: Money` and
-  `occurredAt`.
+  indexed), `direction`, `amount_minor`, `balance_after_minor`, `currency` and
+  `occurredAt`, exposed as `Money` via `amount()` and `balanceAfter()`.
   - It is immutable.
   - The index `(account_id, occurred_at, id)` supports statements.
 
@@ -170,7 +175,7 @@ migration.
 - **`Transfer`** fields:
   - `id`, `kind`
   - `sourceAccountId`, `destinationAccountId`
-  - `amount: Money`, `description`
+  - `amount_minor` plus `currency` (exposed as `Money`), `description`
   - `idempotencyKey` (unique)
   - `requestHash` (sha256 of the canonicalised request)
   - `status`, `journalEntryId`, `createdAt`
@@ -405,20 +410,20 @@ consumers use it for deduplication.
 
 Installed with `composer require`, so Flex recipes wire the config:
 `symfony/messenger`, `symfony/redis-messenger`, `symfony/lock`,
-`symfony/monolog-bundle`.
+`symfony/monolog-bundle`, `moneyphp/money`.
 
 Dev: `symfony/test-pack`, `dama/doctrine-test-bundle`.
 
 Removed: `predis/predis`.
 
 `symfony/serializer`, `symfony/validator` and `symfony/uid` are already
-present. `composer.json` requires `ext-redis`, `ext-bcmath` is not needed
-(integer arithmetic), and `ext-pdo_pgsql` is declared.
+present. `composer.json` declares `ext-redis`, `ext-bcmath` (required by MoneyPHP) and
+`ext-pdo_pgsql`.
 
 ### 9.2 Container image (`services/ledger-service/Dockerfile`)
 
 - Based on `php:8.4-fpm-alpine`.
-- Extensions: `pdo_pgsql`, `intl`, `opcache`, `redis` (pecl).
+- Extensions: `pdo_pgsql`, `intl`, `opcache`, `bcmath`, `redis` (pecl).
 - nginx and supervisor are installed from apk.
 - `docker/nginx.conf`: `root /app/public`, with `try_files` to `index.php`
   and FastCGI to `127.0.0.1:9000`.
@@ -454,7 +459,7 @@ The targets are `help`, `up`, `down`, `build`, `logs`, `sh`, `migrate`,
 
 | Layer | Base class | Covers |
 |---|---|---|
-| Unit | `PHPUnit\Framework\TestCase` | `Money`/`Currency` parsing and arithmetic; `JournalEntry` invariants; `Account` rules (no negative for customers, status gating, close at zero); `Transfer::complete` rules |
+| Unit | `PHPUnit\Framework\TestCase` | `MoneyParser`/`MoneyFormatter`/`SupportedCurrencies` (precision, zero, JPY, unknown code); `JournalEntry` invariants; `Account` rules (no negative for customers, status gating, close at zero); `Transfer::complete` rules |
 | Integration | `KernelTestCase` | repositories; `getForUpdate`; `StatementReader` (opening, lines, closing across date ranges); outbox rows committed with postings and absent after a rollback; `OutboxRelay` dispatches to the in-memory transport and marks rows published; envelopes validate against `/contracts` schemas |
 | Functional | `WebTestCase` | every endpoint: success, problem+json errors, validation `violations[]`, idempotent replay (200, identical body), key reuse with a different body (409), missing key (400) |
 | Invariant | `KernelTestCase` | a scripted mix of deposits, transfers and withdrawals, then balances per currency sum to zero and each cached balance equals the sum of its postings (shares logic with `ledger:verify-balances`) |
@@ -502,6 +507,7 @@ The targets are `help`, `up`, `down`, `build`, `logs`, `sh`, `migrate`,
   - 0004-no-auth-in-stage-1
   - 0005-integer-minor-units
   - 0006-php-fpm-nginx-single-container
+  - 0007-moneyphp-for-money-values
 
 ## 13. Existing code disposition
 
