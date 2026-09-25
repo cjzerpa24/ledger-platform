@@ -1,5 +1,10 @@
 name: ledger-platform
 
+# Shared infrastructure (postgres, redis, loki, grafana) has no profile, so it
+# always starts. Each application service sits behind a profile named after its
+# directory under services/, which lets the Makefile start them one at a time
+# or all together.
+
 x-ledger-service: &ledger-service
   build:
     context: ./services/ledger-service
@@ -21,8 +26,11 @@ x-ledger-service: &ledger-service
       condition: service_healthy
 
 services:
+  # --- Application services -------------------------------------------------
+
   ledger-service:
     <<: *ledger-service
+    profiles: ["ledger-service"]
     ports:
       - "8081:80"
 
@@ -32,6 +40,11 @@ services:
     restart: unless-stopped
     # Enabled by default once the relay command exists (Task 11).
     profiles: ["relay"]
+
+  # webhook-service and reconciliation-service are added here, each with
+  # `profiles: ["<directory name>"]`, once their Dockerfiles exist.
+
+  # --- Shared infrastructure -------------------------------------------------
 
   postgres:
     image: postgres:16-alpine
@@ -50,10 +63,38 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
 
+  loki:
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - lokidata:/loki
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - loki
+
 volumes:
   pgdata:
+  redisdata:
+  lokidata:
+  grafanadata:
