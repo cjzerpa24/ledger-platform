@@ -17,7 +17,7 @@ x-ledger-service: &ledger-service
     - ./contracts:/contracts:ro
   environment:
     DATABASE_URL: postgresql://ledger:ledger@postgres:5432/ledger?serverVersion=16&charset=utf8
-    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events
+    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events?serializer=0
     CONTRACTS_DIR: /contracts
   depends_on:
     postgres:

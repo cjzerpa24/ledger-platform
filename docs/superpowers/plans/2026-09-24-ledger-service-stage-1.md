@@ -172,7 +172,7 @@ In `.env`:
 
 ```dotenv
 ###> ledger events ###
-LEDGER_EVENTS_TRANSPORT_DSN=redis://redis:6379/ledger_events
+LEDGER_EVENTS_TRANSPORT_DSN=redis://redis:6379/ledger_events?serializer=0
 ###< ledger events ###
 ```
 
@@ -359,7 +359,7 @@ x-ledger-service: &ledger-service
     - ./contracts:/contracts:ro
   environment:
     DATABASE_URL: postgresql://ledger:ledger@postgres:5432/ledger?serverVersion=16&charset=utf8
-    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events
+    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events?serializer=0
     CONTRACTS_DIR: /contracts
   depends_on:
     postgres:
@@ -6622,7 +6622,7 @@ jobs:
         ports: ['6379:6379']
     env:
       DATABASE_URL: postgresql://ledger:ledger@127.0.0.1:5432/ledger?serverVersion=16&charset=utf8
-      LEDGER_EVENTS_TRANSPORT_DSN: redis://127.0.0.1:6379/ledger_events
+      LEDGER_EVENTS_TRANSPORT_DSN: redis://127.0.0.1:6379/ledger_events?serializer=0
     steps:
       - uses: actions/checkout@v4
       - uses: shivammathur/setup-php@v2
@@ -6656,6 +6656,7 @@ Append to the spec:
 - `AccountReader` was dropped: `GetAccountHandler` maps the entity via `AccountRepository::get()`. Statements keep the DBAL `StatementReader`.
 - `MoneyParser` and `MoneyFormatter` are stateless static helpers rather than injected services.
 - Unique-constraint races surface as `App\Application\Port\DuplicateRecord`, thrown by `TransactionManager`, so the application layer never imports DBAL exceptions.
+- The `ledger_events` DSN carries `?serializer=0`. phpredis defaults to PHP serialization of the stream field, which the Node `webhooks-service` cannot read; with it off, each entry is `message = {"body": "<envelope JSON>", "headers": {...}}`. `IntegrationEvent`'s public properties must be exactly the envelope fields so `body` is the envelope that `contracts/events/*.v1.schema.json` describes (webhook-service spec §8.1).
 ```
 
 - [ ] **Step 6: Final end-to-end verification**
