@@ -41,8 +41,37 @@ services:
     # Enabled by default once the relay command exists (Task 11).
     profiles: ["relay"]
 
-  # webhook-service and reconciliation-service are added here, each with
-  # `profiles: ["<directory name>"]`, once their Dockerfiles exist.
+  webhooks-service:
+    build:
+      context: ./services/webhooks-service
+      target: dev
+    profiles: ["webhooks-service"]
+    ports:
+      - "8082:3000"
+    volumes:
+      - ./services/webhooks-service:/app
+      - /app/node_modules
+      - ./contracts:/contracts:ro
+    environment:
+      DATABASE_URL: postgresql://ledger:ledger@postgres:5432/webhooks
+      REDIS_URL: redis://redis:6379
+      # Local receivers (e.g. http://host.docker.internal:9000) are allowed in dev only.
+      ALLOW_INSECURE_URLS: "true"
+      ALLOW_PRIVATE_TARGETS: "true"
+      LOG_LEVEL: info
+      TEST_DATABASE_URL: postgresql://ledger:ledger@postgres:5432/webhooks_test
+      TEST_REDIS_URL: redis://redis:6379/15
+      CONTRACTS_DIR: /contracts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # reconciliation-service is added here with `profiles: ["reconciliation-service"]`
+  # once its Dockerfile exists.
 
   # --- Shared infrastructure -------------------------------------------------
 

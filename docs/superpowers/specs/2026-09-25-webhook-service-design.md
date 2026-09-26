@@ -2,7 +2,7 @@
 
 - **Date:** 2026-09-25
 - **Status:** Approved in design review, pending spec review
-- **Scope:** `services/webhook-service`, its wiring in the repo-root `docker-compose.yaml` and `Makefile`, the shared `contracts/events/` schemas, and two configuration changes in `ledger-service` (§8)
+- **Scope:** `services/webhooks-service`, its wiring in the repo-root `docker-compose.yaml` and `Makefile`, the shared `contracts/events/` schemas, and two configuration changes in `ledger-service` (§8)
 
 ## 1. Purpose and success criteria
 
@@ -14,7 +14,7 @@ delivery log.
 
 Stage 1 is done when:
 
-1. `make up-webhook-service` starts the service with Postgres and Redis, and
+1. `make up-webhooks-service` starts the service with Postgres and Redis, and
    `make webhook-migrate` prepares its database.
 2. A subscription created through the API receives a correctly signed POST
    for every matching ledger event, including events published while the
@@ -23,7 +23,8 @@ Stage 1 is done when:
    after 8 failed attempts. A `dead` delivery can be retried by hand.
 4. Duplicate stream messages never produce duplicate deliveries.
 5. `npm run lint`, `npm run typecheck`, `npm test` and `npm run test:e2e`
-   pass, the last two against real Postgres and Redis (Testcontainers).
+   pass (`make webhook-test`), the last one against the real compose
+   Postgres (`webhooks_test` database) and Redis (logical db 15).
 
 ## 2. Decisions
 
@@ -39,42 +40,41 @@ Stage 1 is done when:
 | W8 | Processes | One Nest app with three roles (`api`, `consumer`, `dispatcher`), selected by `ROLES`. All three run in one container by default. |
 | W9 | Auth | None in stage 1. The API is an internal admin API on the compose network, the same stance as ledger-service D7. |
 | W10 | Errors | RFC 9457 `application/problem+json`, `type` = `urn:webhooks:problem:<kebab-name>`. |
+| W11 | SSRF | Subscriber URLs may not reach private, loopback, link-local or reserved addresses. Checked on registration (literal IPs, `localhost`) and enforced at connect time by a DNS `lookup` guard. `ALLOW_PRIVATE_TARGETS=true` lifts it for local development only. |
 
 ## 3. Architecture
 
 Ports and adapters inside one bounded context, `webhooks`. The layers
-depend inwards only: `infrastructure` → `application` → `domain`. An ESLint
-`no-restricted-imports` rule enforces it: `domain` imports nothing from
-Nest, Prisma, ioredis or the other layers, and `application` imports
-nothing from `infrastructure`.
+depend inwards only: `infrastructure` → `application` → `domain`. A Jest
+architecture test (`test/unit/architecture.spec.ts`) enforces it: `domain`
+imports nothing from Nest, Prisma, ioredis or the other layers, and
+`application` imports nothing from `infrastructure`.
 
 ```
-services/webhook-service/
-  Dockerfile, .dockerignore, package.json, tsconfig*.json, eslint.config.mjs, jest configs
+services/webhooks-service/
+  Dockerfile, .dockerignore, package.json, tsconfig*.json, .oxlintrc.json, .prettierrc, jest.config.js, jest.e2e.config.js, prisma.config.ts
   prisma/schema.prisma, prisma/migrations/
   src/
     main.ts                      # bootstraps the roles listed in ROLES
     app.module.ts
     shared/
       config/                    # zod env schema, typed AppConfig
-      health/                    # /health (terminus: prisma + redis)
-      problem-details/           # ProblemDetailsFilter
     webhooks/
       domain/
         subscription/            # Subscription, TargetUrl, EventType, SigningSecret, SubscriptionRepository, errors
         delivery/                # Delivery, DeliveryAttempt, DeliveryStatus, RetryPolicy, DeliveryRepository, errors
         event/                   # LedgerEvent
       application/
-        ports/                   # Clock, HttpSender, Signer, SecretGenerator, UnitOfWork
+        ports/                   # Clock, HttpSender, Signer, SecretGenerator
         register-subscription.ts, pause-subscription.ts, resume-subscription.ts,
         get-subscription.ts, list-subscriptions.ts,
         ingest-ledger-event.ts, dispatch-due-deliveries.ts,
         list-deliveries.ts, get-delivery.ts, retry-delivery.ts
       infrastructure/
-        http/                    # SubscriptionsController, DeliveriesController, DTOs, error mapping
-        persistence/             # PrismaService, Prisma repositories, mappers, PrismaUnitOfWork
-        messaging/               # RedisStreamConsumer, MessengerEnvelopeDecoder
-        delivery/                # FetchHttpSender, StandardWebhooksSigner, DispatcherLoop
+        http/                    # Subscriptions/Deliveries/Health controllers, DTOs, presenters, ProblemDetailsFilter
+        persistence/             # PrismaService, Prisma repositories, mappers
+        messaging/               # RedisClient, RedisStreamConsumer, MessengerEnvelopeDecoder, StreamConsumerRunner
+        delivery/                # NodeHttpSender, StandardWebhooksSigner, DispatcherLoop
         system/                  # SystemClock, CryptoSecretGenerator
       webhooks.module.ts
   test/
@@ -92,7 +92,7 @@ decorates Nest types, so unit tests construct them directly.
 | Field | Type | Rule |
 |---|---|---|
 | `id` | uuid v7 | generated in the domain factory |
-| `url` | `TargetUrl` | absolute URL, `https` only; `http` allowed when `ALLOW_INSECURE_URLS=true`; max 2048 chars; no credentials in the URL |
+| `url` | `TargetUrl` | absolute URL, `https` only; `http` allowed when `ALLOW_INSECURE_URLS=true`; max 2048 chars; no credentials in the URL; unless `ALLOW_PRIVATE_TARGETS=true`, the host may not be `localhost`/`*.localhost` or an IP literal in a blocked range (§6.4) |
 | `eventTypes` | `EventType[]` | non-empty, no duplicates, each one of the four names in §4.3 |
 | `secret` | `SigningSecret` | `whsec_` + base64 of 32 random bytes |
 | `status` | `active` \| `paused` | starts `active` |
@@ -211,15 +211,17 @@ UUID (`ParseUUIDPipe` with status 422), so a malformed id returns
 4. For each entry, `MessengerEnvelopeDecoder` reads the `message` field,
    parses `{body, headers}` and parses `body` as JSON. `LedgerEvent.parse`
    validates it.
-5. `IngestLedgerEvent.execute(event)`: in one transaction, load active
-   subscriptions whose `eventTypes` contain `event.eventName`, and insert one
-   `Delivery` each with `ON CONFLICT (subscription_id, event_id) DO NOTHING`.
+5. `IngestLedgerEvent.execute(event)`: load active subscriptions whose
+   `eventTypes` contain `event.eventName`, and insert one `Delivery` each in
+   a single multi-row `INSERT … ON CONFLICT (subscription_id, event_id) DO
+   NOTHING`. One statement is atomic, so no explicit transaction is needed.
 6. `XACK` the entry after step 5 commits.
 
 A decode or parse failure is logged at `error` level with the stream entry
 id and acknowledged, so a poison message cannot block the stream. A
-database error is not acknowledged: the loop logs, waits 1s and continues,
-and the entry is picked up again from the pending list on the next start.
+database error is not acknowledged: the loop logs, waits 1s and re-reads
+its pending list (`0`) before reading new entries again, so the entry is
+retried until the database is back.
 Shutdown (`SIGTERM`) finishes the current batch and stops.
 
 ### 6.2 Dispatch (role `dispatcher`)
@@ -228,12 +230,12 @@ Shutdown (`SIGTERM`) finishes the current batch and stops.
 `DISPATCH_INTERVAL_MS` (default 1000), and again immediately when the
 previous run claimed a full batch.
 
-1. **Claim**, in a short transaction: select up to 20 deliveries where
-   `status = 'pending' AND next_attempt_at <= now()` and whose subscription
-   is `active`, ordered by `next_attempt_at, id`, `FOR UPDATE OF d SKIP
-   LOCKED`. Set `next_attempt_at = now + LEASE_MS` (60000) on each. Commit.
+1. **Claim**, in one statement: `UPDATE deliveries SET next_attempt_at =
+   now + LEASE_MS WHERE id IN (SELECT … WHERE status = 'pending' AND
+   next_attempt_at <= now AND subscription is active ORDER BY
+   next_attempt_at, id LIMIT 20 FOR UPDATE OF d SKIP LOCKED) RETURNING id`.
 2. **Send**, outside any transaction and concurrently (up to 20 in flight):
-   sign and POST the body with `FetchHttpSender`.
+   sign and POST the body with `NodeHttpSender`.
 3. **Record** each outcome through the aggregate (`recordSuccess` /
    `recordFailure`) and save it with its new attempt.
 
@@ -261,6 +263,27 @@ The HMAC key is the base64-decoded part of the secret after `whsec_`, as
 Standard Webhooks specifies. `StandardWebhooksSigner` is tested against the
 specification's published test vector.
 
+### 6.4 Outbound address policy (SSRF)
+
+`NodeHttpSender` sends with `node:http` / `node:https` (not `fetch`), so it
+can pass a custom `lookup` to the socket. Unless `ALLOW_PRIVATE_TARGETS` is
+`true`:
+
+- a host that is an IP literal is checked before connecting;
+- any other host is resolved with `dns.lookup({ all: true })` inside the
+  socket's `lookup` hook, and the attempt fails if **any** resolved address
+  is blocked. Checking at connect time, not only on registration, defeats
+  DNS rebinding.
+
+Blocked ranges: IPv4 `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`,
+`127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`,
+`224.0.0.0/4`, `240.0.0.0/4`; IPv6 `::`, `::1`, `fc00::/7`, `fe80::/10`,
+`ff00::/8`, and IPv4-mapped addresses (`::ffff:a.b.c.d`) by their IPv4
+value. A blocked attempt is recorded as a normal failure
+(`error: "<host> resolves to a blocked address (…)"`) and retried per
+policy; the subscription owner sees why in the delivery log. Redirects are
+never followed (§4.4), so a public URL cannot bounce into the network.
+
 ## 7. Persistence
 
 Prisma schema, `webhooks` database:
@@ -277,10 +300,10 @@ Prisma schema, `webhooks` database:
   `at timestamptz`, `status_code int null`, `error text null`,
   `duration_ms int`; index `(delivery_id, number)`.
 
-The claim query (§6.2) and the idempotent insert (§6.1) are raw SQL via
-`$queryRaw` / `$executeRaw`, because Prisma has no `SKIP LOCKED` or
-`ON CONFLICT DO NOTHING` for this shape. Everything else uses the Prisma
-client. Schema changes come only from `prisma migrate dev` (committed
+The claim query (§6.2) is raw SQL via `$queryRaw`, because Prisma has no
+`SKIP LOCKED`. The idempotent insert (§6.1) is `createMany({ skipDuplicates:
+true })`, which Prisma renders as `ON CONFLICT DO NOTHING`. Everything else
+uses the Prisma client. Schema changes come only from `prisma migrate dev` (committed
 migrations) and are applied with `prisma migrate deploy`.
 
 ## 8. Cross-service contract
@@ -291,14 +314,17 @@ The consumer relies on exactly what Symfony Messenger's Redis transport
 writes: `XADD ledger_events * message <json>`, where `<json>` is
 `{"body": "<envelope JSON string>", "headers": {...}}`.
 
-That holds only if `ledger-service` (its Task 11) configures:
+That holds only if `ledger-service` configures:
 
-1. **`serializer=0`** on the `ledger_events` transport DSN or options. The
-   default, `\Redis::SERIALIZER_PHP`, wraps the whole field in PHP
-   serialization, which Node cannot read.
-2. **A JSON Messenger serializer** for `IntegrationEvent`
-   (`messenger.transport.symfony_serializer` with the `json` format), with
-   `IntegrationEvent`'s properties being exactly the envelope fields, so
+1. **`serializer=0`** on the `ledger_events` transport, as the DSN query
+   `redis://redis:6379/ledger_events?serializer=0`. The default,
+   `\Redis::SERIALIZER_PHP`, wraps the whole field in PHP serialization,
+   which Node cannot read. This project changes the DSN in the ledger
+   `.env` and in `docker-compose.yaml`.
+2. **A JSON Messenger serializer** for `IntegrationEvent`. The ledger
+   `messenger.yaml` already sets `serializer:
+   messenger.transport.symfony_serializer` (JSON). `IntegrationEvent`'s
+   properties must be exactly the envelope fields (ledger Task 11), so
    `body` is the envelope.
 
 `MessengerEnvelopeDecoder` is the only class that knows this framing.
@@ -326,6 +352,7 @@ invalid config.
 | `CONSUMER_NAME` | hostname | unique per replica |
 | `ROLES` | `api,consumer,dispatcher` | which loops this process runs |
 | `ALLOW_INSECURE_URLS` | `false` | allow `http://` targets (`true` in compose dev) |
+| `ALLOW_PRIVATE_TARGETS` | `false` | lift the §6.4 address policy (`true` in compose dev and tests only) |
 | `DELIVERY_TIMEOUT_MS` | `10000` | per-attempt timeout |
 | `DISPATCH_INTERVAL_MS` | `1000` | dispatcher tick |
 | `LEASE_MS` | `60000` | claim lease |
@@ -337,17 +364,22 @@ Logs are structured JSON on stdout (`nestjs-pino`), ready for Loki.
 
 ### 10.1 Packages
 
-Runtime: `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express`,
-`@nestjs/terminus`, `@prisma/client`, `ioredis`, `class-validator`,
-`class-transformer`, `zod`, `nestjs-pino`, `pino-http`, `uuid` (v7).
-Dev: `prisma`, `@nestjs/cli`, `@nestjs/testing`, `typescript`, `jest`,
-`ts-jest`, `supertest`, `@testcontainers/postgresql`, `@testcontainers/redis`
-(or `testcontainers` generic), `ajv`, `ajv-formats`, `eslint`,
-`typescript-eslint`, `prettier`. Versions are the current majors at
-implementation time, pinned by `package-lock.json`. HTTP delivery uses
-Node's built-in `fetch` with `AbortSignal.timeout`.
+Runtime: `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express`
+(12.1), `@prisma/client` and `@prisma/adapter-pg` (7.10), `pg`, `ioredis`
+(5.10), `class-validator`, `class-transformer`, `zod` (4), `nestjs-pino`,
+`pino`, `pino-http`, `uuid` (11, for v7 ids), `reflect-metadata`, `rxjs`.
+Dev: `prisma` (7.10), `@nestjs/cli`, `@nestjs/testing`, `typescript` (6.0;
+ts-jest does not support 7 yet), `jest` (30), `ts-jest`, `supertest`,
+`ajv`, `ajv-formats`, `oxlint`, `prettier`. The package stays CommonJS;
+the Prisma generator uses `moduleFormat = "cjs"`. NestJS 12 ships as ESM
+and Prisma's runtime uses dynamic `import()`, so Jest runs with
+`node --experimental-vm-modules`.
+HTTP delivery uses `node:http` / `node:https` with `AbortSignal.timeout`
+and the §6.4 `lookup` guard.
+`/health` is a plain controller (`SELECT 1` and `PING`, 1s timeout each),
+so `@nestjs/terminus` is not needed.
 
-### 10.2 Container image (`services/webhook-service/Dockerfile`)
+### 10.2 Container image (`services/webhooks-service/Dockerfile`)
 
 Multi-stage on `node:24-alpine`:
 
@@ -357,27 +389,30 @@ Multi-stage on `node:24-alpine`:
 | `dev` | from `deps`; source bind-mounted; `npx prisma generate && npm run start:dev` |
 | `build` | `prisma generate`, `nest build` |
 | `prod-deps` | `npm ci --omit=dev`, `prisma generate` |
-| `runtime` | non-root `node` user; `dist/`, production `node_modules`, `prisma/`; `EXPOSE 3000`; `HEALTHCHECK` with `node -e "fetch('http://localhost:3000/health')…"`; `CMD ["node", "dist/main.js"]` |
+| `runtime` | non-root `node` user; `dist/` (including the compiled Prisma client) and production `node_modules`; `EXPOSE 3000`; `HEALTHCHECK` with `node -e "fetch('http://localhost:3000/health')…"`; `CMD ["node", "dist/main.js"]` |
 
 Migrations never run on container start.
 
 ### 10.3 Compose (repo-root `docker-compose.yaml`)
 
-`webhook-service`: build target `dev`, `profiles: ["webhook-service"]`,
+`webhooks-service`: build target `dev`, `profiles: ["webhooks-service"]`,
 ports `8082:3000`, `DATABASE_URL=postgresql://ledger:ledger@postgres:5432/webhooks`,
-`REDIS_URL=redis://redis:6379`, `ALLOW_INSECURE_URLS=true`, depends on
-healthy postgres and redis, source mounted with an anonymous volume for
-`node_modules`.
+`REDIS_URL=redis://redis:6379`, `ALLOW_INSECURE_URLS=true`, `ALLOW_PRIVATE_TARGETS=true`,
+`TEST_DATABASE_URL=…/webhooks_test`, `TEST_REDIS_URL=redis://redis:6379/15`,
+`CONTRACTS_DIR=/contracts` (the repo `contracts/` mounted read-only),
+depends on healthy postgres and redis, source mounted with an anonymous
+volume for `node_modules`.
 
 ### 10.4 Root Makefile
 
-- `webhook-migrate`: `CREATE DATABASE webhooks` if it is missing (through
-  the postgres container), then `npx prisma migrate deploy` in the service
+- `webhook-db`: `CREATE DATABASE` for `webhooks` and `webhooks_test` if
+  they are missing (through the postgres container).
+- `webhook-migrate`: `npx prisma migrate deploy` against both databases.
+- `webhook-test`: lint, typecheck, unit, integration and e2e tests in the
   container.
-- `webhook-test`: unit, integration and e2e tests in the container.
 - `webhook-sh`: a shell in the container.
 
-`make up` and `make up-webhook-service` pick the service up automatically
+`make up` and `make up-webhooks-service` pick the service up automatically
 once its Dockerfile exists.
 
 ## 11. Testing strategy
@@ -388,8 +423,8 @@ implement.
 | Level | Tooling | Covers |
 |---|---|---|
 | Unit | Jest | `TargetUrl`, `EventType`, `SigningSecret`, `Subscription`, `Delivery`, `RetryPolicy`, `LedgerEvent.parse`, `MessengerEnvelopeDecoder`, `StandardWebhooksSigner` (spec test vector); every use case against in-memory repositories, a fake clock and a fake sender |
-| Integration | Jest + Testcontainers (Postgres 16, Redis 7) | Prisma repositories and mappers; idempotent delivery insert; two concurrent claims never return the same delivery; lease expiry makes a delivery claimable again; `RedisStreamConsumer` creates the group, drains pending entries after a simulated crash, acks poison messages |
-| E2E | Jest + supertest + Testcontainers | every endpoint and every §5.1 error; the full flow: `XADD` a Messenger-framed envelope → consumer → dispatcher → a local HTTP receiver that verifies the signature; a failing receiver gets its next attempt scheduled per `RetryPolicy`; the same `XADD` twice produces one delivery |
+| Integration | Jest against the compose Postgres (`webhooks_test`) and Redis (db 15) | Prisma repositories and mappers; idempotent delivery insert; two concurrent claims never return the same delivery; lease expiry makes a delivery claimable again; `RedisStreamConsumer` creates the group, drains pending entries after a simulated crash, acks poison messages |
+| E2E | Jest + supertest against the same compose services | every endpoint and every §5.1 error; the full flow: `XADD` a Messenger-framed envelope → consumer → dispatcher → a local HTTP receiver that verifies the signature; a failing receiver gets its next attempt scheduled per `RetryPolicy`; the same `XADD` twice produces one delivery |
 | Contract | ajv | envelope fixtures used in the tests validate against `contracts/events/*.schema.json` |
 
 Time-dependent tests use the `Clock` port with a fake, never real sleeps,
@@ -397,12 +432,12 @@ except the lease test, which uses a short `LEASE_MS`.
 
 ## 12. Quality gates
 
-From `services/webhook-service`, before each commit:
+From `services/webhooks-service`, before each commit:
 
-- `npm run lint` (ESLint including the layer rule, Prettier check)
+- `npm run lint` (oxlint with type-aware rules, Prettier check)
 - `npm run typecheck` (`tsc --noEmit`)
 - `npm test` (unit)
-- `npm run test:e2e` (integration and e2e, needs Docker)
+- `npm run test:e2e` (integration and e2e, needs the compose Postgres and Redis)
 
 Commit messages contain no AI attribution. A GitHub Actions workflow is out
 of scope for stage 1 and is added alongside the ledger CI (ledger Task 14).
