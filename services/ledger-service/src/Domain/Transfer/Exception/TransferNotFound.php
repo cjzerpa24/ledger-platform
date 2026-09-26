@@ -1,0 +1,16 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Transfer\Exception;
+
+use App\Domain\Shared\LedgerException;
+use Symfony\Component\Uid\Uuid;
+
+final class TransferNotFound extends LedgerException
+{
+    public static function withId(Uuid $id): self
+    {
+        return new self(\sprintf('Transfer %s was not found.', $id->toRfc4122()));
+    }
+}

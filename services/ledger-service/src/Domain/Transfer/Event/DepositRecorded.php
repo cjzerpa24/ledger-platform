@@ -1,0 +1,13 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Domain\Transfer\Event;
+
+final readonly class DepositRecorded extends TransferEvent
+{
+    public function eventName(): string
+    {
+        return 'ledger.deposit_recorded';
+    }
+}

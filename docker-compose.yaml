@@ -1,0 +1,133 @@
+name: ledger-platform
+
+# Shared infrastructure (postgres, redis, loki, grafana) has no profile, so it
+# always starts. Each application service sits behind a profile named after its
+# directory under services/, which lets the Makefile start them one at a time
+# or all together.
+
+x-ledger-service: &ledger-service
+  # One image for the API and the relay, built once.
+  image: ledger-platform-ledger-service
+  build:
+    context: ./services/ledger-service
+    target: dev
+    args:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+  volumes:
+    - ./services/ledger-service:/app
+    - ./contracts:/contracts:ro
+  environment:
+    DATABASE_URL: postgresql://ledger:ledger@postgres:5432/ledger?serverVersion=16&charset=utf8
+    LEDGER_EVENTS_TRANSPORT_DSN: redis://redis:6379/ledger_events?serializer=0&auto_setup=false&delete_after_ack=false&stream_max_entries=100000
+    CONTRACTS_DIR: /contracts
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  # --- Application services -------------------------------------------------
+
+  ledger-service:
+    <<: *ledger-service
+    profiles: ["ledger-service"]
+    ports:
+      - "8081:80"
+
+  ledger-outbox-relay:
+    <<: *ledger-service
+    command: ["php", "bin/console", "ledger:outbox:relay", "--loop"]
+    restart: unless-stopped
+    # Publishes committed outbox rows to the ledger_events stream.
+    profiles: ["ledger-service"]
+
+  webhooks-service:
+    build:
+      context: ./services/webhooks-service
+      target: dev
+    profiles: ["webhooks-service"]
+    ports:
+      - "8082:3000"
+    volumes:
+      - ./services/webhooks-service:/app
+      - /app/node_modules
+      - ./contracts:/contracts:ro
+    environment:
+      DATABASE_URL: postgresql://ledger:ledger@postgres:5432/webhooks
+      REDIS_URL: redis://redis:6379
+      # Stable name so a recreated container resumes its own pending stream entries.
+      CONSUMER_NAME: webhooks-service-1
+      # Local receivers (e.g. http://host.docker.internal:9000) are allowed in dev only.
+      ALLOW_INSECURE_URLS: "true"
+      ALLOW_PRIVATE_TARGETS: "true"
+      LOG_LEVEL: info
+      TEST_DATABASE_URL: postgresql://ledger:ledger@postgres:5432/webhooks_test
+      TEST_REDIS_URL: redis://redis:6379/15
+      CONTRACTS_DIR: /contracts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # reconciliation-service is added here with `profiles: ["reconciliation-service"]`
+  # once its Dockerfile exists.
+
+  # --- Shared infrastructure -------------------------------------------------
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - lokidata:/loki
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      - loki
+
+volumes:
+  pgdata:
+  redisdata:
+  lokidata:
+  grafanadata:
