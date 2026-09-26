@@ -4,4 +4,5 @@ framework:
             ledger_events:
                 dsn: '%env(LEDGER_EVENTS_TRANSPORT_DSN)%'
                 serializer: messenger.transport.symfony_serializer
-        routing: { }
+        routing:
+            App\Infrastructure\Messaging\IntegrationEvent: ledger_events

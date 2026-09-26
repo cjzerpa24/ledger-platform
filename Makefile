@@ -34,15 +34,15 @@ up: ## Start infrastructure and every service with a Dockerfile
 up-infra: ## Start only postgres, redis, loki and grafana
 	$(COMPOSE) up -d $(INFRA)
 
-up-%: ## Start infrastructure plus one service, e.g. make up-ledger-service
+up-%: ## Start infrastructure plus one service's containers, e.g. make up-ledger-service
 	@test -f services/$*/Dockerfile || { echo "services/$*/Dockerfile does not exist yet"; exit 1; }
-	$(COMPOSE) --profile $* up -d --build $(INFRA) $*
+	$(COMPOSE) --profile $* up -d --build
 
 down: ## Stop everything, including all service profiles
 	$(COMPOSE) --profile '*' down
 
-down-%: ## Stop one service, e.g. make down-ledger-service
-	$(COMPOSE) --profile $* stop $*
+down-%: ## Stop one service's containers, e.g. make down-ledger-service
+	$(COMPOSE) --profile $* stop $$($(COMPOSE) --profile $* config --services | grep -vxE '$(subst $() ,|,$(INFRA))')
 
 build: ## Build images of every service with a Dockerfile
 	$(COMPOSE) $(PROFILES) build
