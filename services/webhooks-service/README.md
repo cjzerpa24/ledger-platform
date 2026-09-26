@@ -80,6 +80,9 @@ DispatcherLoop (every 1s) ──▶ claim due rows (FOR UPDATE SKIP LOCKED + 60s
 
 - **At-least-once in, deduplicated:** an entry is acknowledged only after its
   deliveries are stored; a replay hits the unique key and is a no-op.
+- **Nothing stranded:** entries left pending by a crashed or renamed consumer
+  are taken over (`XAUTOCLAIM`) once idle for `CLAIM_IDLE_MS`, on startup and
+  every 30s; entries trimmed from the stream meanwhile are acknowledged.
 - **Safe to scale:** several dispatchers never claim the same delivery.
 - **SSRF guard:** URLs pointing at private, loopback, link-local or reserved
   addresses are rejected on registration and again at connect time (DNS lookup
@@ -109,6 +112,7 @@ test/
 | `REDIS_URL` | required | `redis://redis:6379` |
 | `LEDGER_STREAM` | `ledger_events` | |
 | `CONSUMER_GROUP` / `CONSUMER_NAME` | `webhook-service` / hostname | |
+| `CLAIM_IDLE_MS` | `60000` | take over entries pending this long under any consumer |
 | `ROLES` | `api,consumer,dispatcher` | |
 | `ALLOW_INSECURE_URLS` | `false` | allow `http://` targets |
 | `ALLOW_PRIVATE_TARGETS` | `false` | allow private addresses (dev only) |

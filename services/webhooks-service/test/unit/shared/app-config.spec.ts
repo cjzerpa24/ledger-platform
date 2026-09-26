@@ -16,6 +16,7 @@ describe('loadConfig', () => {
       deliveryTimeoutMs: 10_000,
       dispatchIntervalMs: 1_000,
       leaseMs: 60_000,
+      claimIdleMs: 60_000,
     });
     expect(config.consumerName.length).toBeGreaterThan(0);
   });
@@ -26,11 +27,13 @@ describe('loadConfig', () => {
       ROLES: 'api, dispatcher',
       ALLOW_INSECURE_URLS: 'true',
       DELIVERY_TIMEOUT_MS: '2500',
+      CLAIM_IDLE_MS: '15000',
     });
 
     expect(config.roles).toEqual(['api', 'dispatcher']);
     expect(config.allowInsecureUrls).toBe(true);
     expect(config.deliveryTimeoutMs).toBe(2500);
+    expect(config.claimIdleMs).toBe(15_000);
   });
 
   it('lists every problem in one error', () => {

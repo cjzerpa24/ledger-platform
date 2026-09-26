@@ -11,10 +11,15 @@ export interface StreamConsumerOptions {
   count: number;
   blockMs: number;
   retryDelayMs: number;
+  /** Entries pending under any consumer for at least this long are taken over (XAUTOCLAIM). */
+  claimIdleMs: number;
+  /** How often run() looks for such entries while it is running. */
+  claimIntervalMs: number;
 }
 
 type StreamEntry = [id: string, fields: string[]];
 type XReadGroupReply = [stream: string, entries: StreamEntry[]][] | null;
+type XAutoClaimReply = [nextStart: string, entries: StreamEntry[], deletedIds: string[]];
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -28,6 +33,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
 /**
  * Reads the ledger stream through a consumer group. An entry is acknowledged only after its deliveries are
  * stored, so a crash replays it (deduplicated downstream). Poison entries are logged and acknowledged.
+ * Entries left pending by another consumer (a crashed or renamed replica) are taken over once idle for
+ * `claimIdleMs`.
  */
 export class RedisStreamConsumer {
   constructor(
@@ -74,12 +81,53 @@ export class RedisStreamConsumer {
     return entries.length;
   }
 
-  /** Drains pending entries, then reads new ones until aborted. After a failure it goes back to the pending list. */
+  /**
+   * Takes over every entry pending under any consumer for at least `claimIdleMs` and processes it. Entries
+   * that were trimmed from the stream meanwhile are acknowledged so they leave the pending list.
+   * Returns how many entries were processed; throws if storing any of them failed (they stay pending, now ours).
+   */
+  async claimStale(): Promise<number> {
+    let start = '0-0';
+    let processed = 0;
+    do {
+      const [next, entries, deletedIds] = (await this.redis.call(
+        'XAUTOCLAIM',
+        this.options.stream,
+        this.options.group,
+        this.options.consumer,
+        this.options.claimIdleMs,
+        start,
+        'COUNT',
+        this.options.count,
+      )) as XAutoClaimReply;
+      if (deletedIds.length > 0) {
+        this.logger.warn(`Acknowledging pending entries no longer in the stream: ${deletedIds.join(', ')}`);
+        await this.redis.xack(this.options.stream, this.options.group, ...deletedIds);
+      }
+      for (const [id, fields] of entries) {
+        await this.handle(id, fields);
+        processed += 1;
+      }
+      start = next;
+    } while (start !== '0-0');
+
+    return processed;
+  }
+
+  /**
+   * Claims stale entries of other consumers, drains its own pending entries, then reads new ones until aborted,
+   * claiming again at most every `claimIntervalMs`. After a failure it goes back to the pending list.
+   */
   async run(signal: AbortSignal): Promise<void> {
     await this.ensureGroup();
     let from: '0' | '>' = '0';
+    let nextClaimAt = 0;
     while (!signal.aborted) {
       try {
+        if (Date.now() >= nextClaimAt) {
+          await this.claimStale();
+          nextClaimAt = Date.now() + this.options.claimIntervalMs;
+        }
         const read = await this.processBatch(from, from === '>' ? this.options.blockMs : undefined);
         if (from === '0' && read === 0) {
           from = '>';

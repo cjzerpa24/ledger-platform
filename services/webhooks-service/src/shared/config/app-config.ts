@@ -31,6 +31,7 @@ const schema = z.object({
   DELIVERY_TIMEOUT_MS: positiveInt(10_000),
   DISPATCH_INTERVAL_MS: positiveInt(1_000),
   LEASE_MS: positiveInt(60_000),
+  CLAIM_IDLE_MS: positiveInt(60_000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 
@@ -47,6 +48,7 @@ export interface AppConfig {
   deliveryTimeoutMs: number;
   dispatchIntervalMs: number;
   leaseMs: number;
+  claimIdleMs: number;
   logLevel: string;
 }
 
@@ -72,6 +74,7 @@ export function loadConfig(env: Record<string, string | undefined>): AppConfig {
     deliveryTimeoutMs: e.DELIVERY_TIMEOUT_MS,
     dispatchIntervalMs: e.DISPATCH_INTERVAL_MS,
     leaseMs: e.LEASE_MS,
+    claimIdleMs: e.CLAIM_IDLE_MS,
     logLevel: e.LOG_LEVEL,
   };
 }

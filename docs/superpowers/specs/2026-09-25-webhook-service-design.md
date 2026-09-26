@@ -204,10 +204,19 @@ UUID (`ParseUUIDPipe` with status 422), so a malformed id returns
 1. On start, `XGROUP CREATE ledger_events webhook-service $ MKSTREAM`,
    ignoring `BUSYGROUP`. A new group starts at `$`: history from before the
    group existed is not replayed.
-2. Drain its own pending entries first: `XREADGROUP GROUP webhook-service
-   <CONSUMER_NAME> COUNT 50 STREAMS ledger_events 0` until empty. This
-   resumes messages read but not acknowledged before a crash.
-3. Loop: `XREADGROUP … COUNT 50 BLOCK 5000 STREAMS ledger_events >`.
+2. Take over entries left pending by any consumer (a crashed replica, or
+   this one under a previous hostname): `XAUTOCLAIM ledger_events
+   webhook-service <CONSUMER_NAME> <CLAIM_IDLE_MS> 0-0 COUNT 50`, following
+   the returned start id until it is `0-0`. Claimed entries are processed
+   like any other (steps 4-6). Ids in the reply's deleted list were trimmed
+   from the stream (`stream_max_entries`): they are `XACK`ed with a warning.
+3. Drain its own pending entries: `XREADGROUP GROUP webhook-service
+   <CONSUMER_NAME> COUNT 50 STREAMS ledger_events 0` until empty. Together
+   with step 2 this resumes messages read but not acknowledged before a
+   crash.
+   Loop: `XREADGROUP … COUNT 50 BLOCK 5000 STREAMS ledger_events >`,
+   repeating step 2 at most every 30s so a live replica picks up a dead
+   one's entries without a restart.
 4. For each entry, `MessengerEnvelopeDecoder` reads the `message` field,
    parses `{body, headers}` and parses `body` as JSON. `LedgerEvent.parse`
    validates it.
@@ -350,6 +359,7 @@ invalid config.
 | `LEDGER_STREAM` | `ledger_events` | stream key |
 | `CONSUMER_GROUP` | `webhook-service` | |
 | `CONSUMER_NAME` | hostname | unique per replica |
+| `CLAIM_IDLE_MS` | `60000` | pending entries idle this long under any consumer are taken over (§6.1) |
 | `ROLES` | `api,consumer,dispatcher` | which loops this process runs |
 | `ALLOW_INSECURE_URLS` | `false` | allow `http://` targets (`true` in compose dev) |
 | `ALLOW_PRIVATE_TARGETS` | `false` | lift the §6.4 address policy (`true` in compose dev and tests only) |

@@ -27,15 +27,35 @@ describe('RedisStreamConsumer', () => {
   let stream: string;
   let ingest: RecordingIngest;
 
-  const consumer = (name = 'test-consumer') =>
+  const consumer = (name = 'test-consumer', claimIdleMs = 60_000) =>
     new RedisStreamConsumer(
       redis,
       ingest as unknown as IngestLedgerEvent,
       new MessengerEnvelopeDecoder(),
-      { stream, group: 'webhook-service', consumer: name, count: 50, blockMs: 100, retryDelayMs: 10 },
+      {
+        stream,
+        group: 'webhook-service',
+        consumer: name,
+        count: 50,
+        blockMs: 100,
+        retryDelayMs: 10,
+        claimIdleMs,
+        claimIntervalMs: 30_000,
+      },
       new Logger('test', { timestamp: false }),
     );
   const pending = async () => ((await redis.xpending(stream, 'webhook-service')) as [number])[0];
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  /** Leaves one entry read but unacknowledged under `crashed-replica`, as if that replica died mid-batch. */
+  const strandEntry = async () => {
+    const crashed = consumer('crashed-replica');
+    await crashed.ensureGroup();
+    const id = await redis.xadd(stream, '*', 'message', messengerFrame(envelope()));
+    ingest.failNext = 1;
+    await expect(crashed.processBatch('>')).rejects.toThrow('database unavailable');
+    expect(await pending()).toBe(1);
+    return id as string;
+  };
 
   beforeEach(() => {
     stream = `ledger_events_test_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -106,6 +126,53 @@ describe('RedisStreamConsumer', () => {
     const deadline = Date.now() + 5000;
     while (ingest.events.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    abort.abort();
+    await running;
+
+    expect(ingest.events).toHaveLength(1);
+    expect(await pending()).toBe(0);
+  });
+
+  it('takes over an entry left pending by another consumer once it has been idle long enough', async () => {
+    await strandEntry();
+    await wait(80);
+
+    const live = consumer('live-replica', 50);
+    expect(await live.claimStale()).toBe(1);
+    expect(ingest.events).toHaveLength(1);
+    expect(await pending()).toBe(0);
+  });
+
+  it('does not take over an entry that is still within the idle time', async () => {
+    await strandEntry();
+
+    const live = consumer('live-replica', 60_000);
+    expect(await live.claimStale()).toBe(0);
+    expect(ingest.events).toHaveLength(0);
+    expect(await pending()).toBe(1);
+  });
+
+  it('acknowledges pending entries whose stream entry no longer exists', async () => {
+    const id = await strandEntry();
+    await redis.xdel(stream, id);
+    await wait(80);
+
+    const live = consumer('live-replica', 50);
+    expect(await live.claimStale()).toBe(0);
+    expect(ingest.events).toHaveLength(0);
+    expect(await pending()).toBe(0);
+  });
+
+  it('run() claims entries stranded by a crashed replica on startup', async () => {
+    await strandEntry();
+    await wait(80);
+    const abort = new AbortController();
+
+    const running = consumer('live-replica', 50).run(abort.signal);
+    const deadline = Date.now() + 5000;
+    while (ingest.events.length === 0 && Date.now() < deadline) {
+      await wait(20);
     }
     abort.abort();
     await running;

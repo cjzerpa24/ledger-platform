@@ -57,6 +57,8 @@ services:
     environment:
       DATABASE_URL: postgresql://ledger:ledger@postgres:5432/webhooks
       REDIS_URL: redis://redis:6379
+      # Stable name so a recreated container resumes its own pending stream entries.
+      CONSUMER_NAME: webhooks-service-1
       # Local receivers (e.g. http://host.docker.internal:9000) are allowed in dev only.
       ALLOW_INSECURE_URLS: "true"
       ALLOW_PRIVATE_TARGETS: "true"

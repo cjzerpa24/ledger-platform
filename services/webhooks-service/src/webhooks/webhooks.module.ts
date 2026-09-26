@@ -34,6 +34,8 @@ import { CryptoSecretGenerator } from './infrastructure/system/crypto-secret-gen
 import { SystemClock } from './infrastructure/system/system-clock';
 
 const DISPATCH_BATCH_SIZE = 20;
+/** How often the consumer looks for entries stranded by other consumers (see CLAIM_IDLE_MS). */
+const CLAIM_INTERVAL_MS = 30_000;
 
 /** Use cases are plain classes; Nest only wires their ports here. */
 const factory = <T>(provide: unknown, inject: unknown[], useFactory: (...deps: never[]) => T): Provider => ({
@@ -133,6 +135,8 @@ const background: Provider[] = [
           count: 50,
           blockMs: 5_000,
           retryDelayMs: 1_000,
+          claimIdleMs: config.claimIdleMs,
+          claimIntervalMs: CLAIM_INTERVAL_MS,
         },
         new Logger(RedisStreamConsumer.name),
       ),
