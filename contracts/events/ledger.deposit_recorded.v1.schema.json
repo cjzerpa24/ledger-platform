@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ledger-platform:contracts:events:ledger.deposit_recorded:v1",
+  "title": "ledger.deposit_recorded v1",
+  "description": "Money entered the ledger from the settlement account. Delivered at least once; deduplicate on eventId.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "eventId",
+    "eventName",
+    "eventVersion",
+    "occurredAt",
+    "aggregateId",
+    "payload"
+  ],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "eventName": {
+      "const": "ledger.deposit_recorded"
+    },
+    "eventVersion": {
+      "const": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "aggregateId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transferId",
+        "journalEntryId",
+        "sourceAccountId",
+        "destinationAccountId",
+        "amount",
+        "amountMinor",
+        "currency",
+        "description",
+        "completedAt"
+      ],
+      "properties": {
+        "transferId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "journalEntryId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceAccountId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "destinationAccountId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^\\d+(\\.\\d+)?$"
+        },
+        "amountMinor": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}
