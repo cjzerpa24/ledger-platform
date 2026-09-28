@@ -204,4 +204,14 @@ class MatcherTest {
                         ItemKind.MISSING_IN_BANK))
                 .allMatch(ItemKind::isException);
     }
+
+    @Test
+    void rejectsDuplicateTransferIds() {
+        LedgerEntry first = ledger(A, "2026-03-05T10:00:00Z", IN, "10.00");
+        LedgerEntry duplicate = ledger(A, "2026-03-06T11:00:00Z", IN, "20.00");
+
+        assertThatThrownBy(() -> match(List.of(), List.of(first, duplicate)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(A);
+    }
 }

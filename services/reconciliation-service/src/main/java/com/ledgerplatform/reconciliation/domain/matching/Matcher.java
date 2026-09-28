@@ -29,9 +29,13 @@ public final class Matcher {
     /**
      * Returns one outcome per bank line in (date, row) order, then one {@code MISSING_IN_BANK} outcome per unpaired
      * ledger entry dated inside {@code period}, in (occurredAt, transferId) order.
+     *
+     * @throws IllegalArgumentException if ledgerEntries contains duplicate transferIds
+     * @precondition ledgerEntries must have distinct transferIds
      */
     public List<MatchOutcome> match(
             List<BankLine> bankLines, List<LedgerEntry> ledgerEntries, Period period, MatchingPolicy policy) {
+        validateNoDuplicateTransferIds(ledgerEntries);
         List<BankLine> bank = bankLines.stream().sorted(BANK_ORDER).toList();
         List<LedgerEntry> ledger = ledgerEntries.stream().sorted(LEDGER_ORDER).toList();
         Map<BankLine, MatchOutcome> outcomes = new HashMap<>();
@@ -110,5 +114,15 @@ public final class Matcher {
         return entry.direction() == line.direction()
                 && entry.amount().equals(line.amount())
                 && Math.abs(ChronoUnit.DAYS.between(line.date(), entry.date())) <= policy.windowDays();
+    }
+
+    private static void validateNoDuplicateTransferIds(List<LedgerEntry> ledgerEntries) {
+        Set<UUID> seen = new HashSet<>();
+        for (LedgerEntry entry : ledgerEntries) {
+            UUID transferId = entry.transferId();
+            if (!seen.add(transferId)) {
+                throw new IllegalArgumentException("Duplicate ledger transferId " + transferId);
+            }
+        }
     }
 }
