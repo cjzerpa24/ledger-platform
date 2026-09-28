@@ -11,10 +11,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.ledgerplatform.reconciliation.domain.matching.ItemKind;
 import com.ledgerplatform.reconciliation.domain.matching.MatchMethod;
 import com.ledgerplatform.reconciliation.domain.matching.MatchOutcome;
+import com.ledgerplatform.reconciliation.domain.money.Money;
 import com.ledgerplatform.reconciliation.domain.money.SupportedCurrency;
 import com.ledgerplatform.reconciliation.domain.statement.BankLine;
 import com.ledgerplatform.reconciliation.domain.statement.LedgerEntry;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
@@ -172,6 +174,20 @@ class ReconciliationRunTest {
         assertThatThrownBy(() -> run.manualMatch(bankIn, null, "x", T1))
                 .isInstanceOf(InvalidManualMatchException.class);
         assertThat(run.unresolvedExceptions()).isEqualTo(3);
+    }
+
+    @Test
+    void manualMatchRejectsDifferentCurrenciesEvenWithANote() {
+        BankLine eurTen = new BankLine(
+                1, LocalDate.parse("2026-03-05"), IN, null, null, Money.parse("10.00", SupportedCurrency.EUR));
+        ReconciliationRun run = start(MatchOutcome.missingInLedger(eurTen), MatchOutcome.missingInBank(ledgerInTen));
+        UUID bankSide = itemId(run, ItemKind.MISSING_IN_LEDGER);
+        UUID ledgerSide = itemId(run, ItemKind.MISSING_IN_BANK);
+
+        assertThatThrownBy(() -> run.manualMatch(bankSide, ledgerSide, "explained", T1))
+                .isInstanceOf(InvalidManualMatchException.class)
+                .hasMessageContaining("currency");
+        assertThat(run.unresolvedExceptions()).isEqualTo(2);
     }
 
     @Test

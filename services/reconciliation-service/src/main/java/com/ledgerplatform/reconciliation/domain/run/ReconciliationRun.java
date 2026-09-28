@@ -108,6 +108,10 @@ public final class ReconciliationRun {
         if (bankSide.bankLine().direction() != ledgerSide.ledgerEntry().direction()) {
             throw new InvalidManualMatchException("Both items must move money in the same direction.");
         }
+        if (bankSide.bankLine().amount().currency()
+                != ledgerSide.ledgerEntry().amount().currency()) {
+            throw new InvalidManualMatchException("Both items must be in the same currency.");
+        }
         String text = optionalNote(note);
         if (!bankSide.bankLine().amount().equals(ledgerSide.ledgerEntry().amount()) && text == null) {
             throw new InvalidManualMatchException("The amounts differ; explain the match in a note.");
