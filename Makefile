@@ -13,13 +13,17 @@ WEBHOOKS      := $(COMPOSE) exec webhooks-service
 WEBHOOKS_DBS  := webhooks webhooks_test
 PG_URL        := postgresql://ledger:ledger@postgres:5432
 
+# reconciliation-service helpers
+RECON      := $(COMPOSE) exec reconciliation-service
+RECON_DBS  := reconciliation reconciliation_test
+
 # ledger-service helpers
 EXEC    := $(COMPOSE) exec -u www-data ledger-service
 CONSOLE := $(EXEC) php bin/console
 
 .DEFAULT_GOAL := help
 .PHONY: help services up up-infra down build ps logs sh install migrate seed test-db test check verify \
-        webhook-db webhook-migrate webhook-test webhook-sh
+        webhook-db webhook-migrate webhook-test webhook-sh recon-db recon-test recon-sh
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_%-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "} {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
@@ -97,3 +101,15 @@ webhook-test: webhook-migrate ## Lint, typecheck, unit, integration and e2e test
 
 webhook-sh: ## Shell into the webhooks-service container
 	$(WEBHOOKS) sh
+
+recon-db: ## Create the reconciliation and reconciliation_test databases if missing
+	@for db in $(RECON_DBS); do \
+	  $(COMPOSE) exec -T postgres psql -U ledger -d ledger -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1 \
+	    || $(COMPOSE) exec -T postgres createdb -U ledger $$db; \
+	done
+
+recon-test: ## Format check, Checkstyle, unit, architecture and integration tests for reconciliation-service
+	$(RECON) ./mvnw -B verify
+
+recon-sh: ## Shell into the reconciliation-service container
+	$(RECON) sh

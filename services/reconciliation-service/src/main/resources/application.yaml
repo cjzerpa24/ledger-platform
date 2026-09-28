@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: reconciliation-service
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  servlet:
+    multipart:
+      max-file-size: 6MB
+      max-request-size: 7MB
+server:
+  port: 8080
+logging:
+  structured:
+    format:
+      console: ecs
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
