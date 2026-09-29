@@ -25,3 +25,7 @@ management:
       show-details: always
       probes:
         enabled: true
+reconciliation:
+  ledger-base-url: ${LEDGER_BASE_URL:http://ledger-service}
+  ledger-timeout-ms: ${LEDGER_TIMEOUT_MS:5000}
+  match-window-days: ${MATCH_WINDOW_DAYS:2}
