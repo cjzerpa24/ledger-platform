@@ -49,6 +49,9 @@ public class ProblemDetailsAdvice {
 
     @ExceptionHandler(DomainException.class)
     ProblemDetail domain(DomainException e) {
+        if ("validation-failed".equals(e.code())) {
+            return validation(List.of(new FieldError(null, e.getMessage())));
+        }
         ProblemDetail problem = problem(
                 DOMAIN_STATUS.getOrDefault(e.getClass(), HttpStatus.UNPROCESSABLE_ENTITY), e.code(), e.getMessage());
         if (e instanceof DuplicateStatementException duplicate) {

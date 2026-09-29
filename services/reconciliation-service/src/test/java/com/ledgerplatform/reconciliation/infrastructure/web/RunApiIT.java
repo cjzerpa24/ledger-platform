@@ -4,6 +4,7 @@ import static com.ledgerplatform.reconciliation.domain.money.Direction.IN;
 import static com.ledgerplatform.reconciliation.domain.money.Direction.OUT;
 import static com.ledgerplatform.reconciliation.support.Fixtures.ledger;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -252,12 +253,11 @@ class RunApiIT {
                         .get(0))
                 .get("id");
 
-        expectProblem(
-                mvc.perform(post("/runs/{id}/items/{item}/resolve", runId, itemId)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"resolution\":\"IGNORE\"}")),
-                422,
-                "validation-failed");
+        ResultActions ignoreWithoutNote = mvc.perform(post("/runs/{id}/items/{item}/resolve", runId, itemId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"resolution\":\"IGNORE\"}"));
+        expectProblem(ignoreWithoutNote, 422, "validation-failed");
+        ignoreWithoutNote.andExpect(jsonPath("$.errors[0].message").value(containsString("note")));
         expectProblem(
                 mvc.perform(post("/runs/{id}/items/{item}/resolve", runId, itemId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -294,8 +294,9 @@ class RunApiIT {
     }
 
     @Test
-    void healthShowsTheDatabase() throws Exception {
+    void healthReportsTheDatabaseAndTheLedger() throws Exception {
         mvc.perform(get("/actuator/health"))
-                .andExpect(jsonPath("$.components.db.status").value("UP"));
+                .andExpect(jsonPath("$.components.db.status").value("UP"))
+                .andExpect(jsonPath("$.components.ledger.status").value("DOWN"));
     }
 }
