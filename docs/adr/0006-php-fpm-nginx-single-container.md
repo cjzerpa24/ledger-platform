@@ -21,8 +21,9 @@ moving parts for a single service and complicates health checks.
 
 ## Consequences
 
-- One image to build, scan and deploy; one health check covers the web
-  server and PHP together.
+- One image to build, scan and deploy. `GET /health` goes through nginx and
+  php-fpm to the database, so one probe covers the whole path; the image and
+  compose don't define a `HEALTHCHECK` yet.
 - supervisord is an extra process manager inside the container; a crash of
   either nginx or php-fpm is restarted by it rather than by the orchestrator.
 - The dev target mounts the source and remaps `www-data` to the host UID so

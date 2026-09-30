@@ -37,7 +37,13 @@ Rejected alternatives:
 
 - Balance reads are one row lookup.
 - Transfers on the same account serialize; throughput per hot account is
-  bounded by that lock. Transfers on different accounts run in parallel.
+  bounded by that lock. Internal transfers between different accounts run
+  in parallel.
+- Every deposit and withdrawal also locks its currency's single settlement
+  account, so all deposits and withdrawals in one currency serialize on one
+  row. That is the main throughput limit of this design. Stage 2 options
+  include several settlement accounts per currency or batching postings to
+  it.
 - `tests/Concurrency` proves both properties with real parallel processes:
   five overlapping transfers let exactly the affordable ones through, and
   opposite-direction transfers never deadlock.

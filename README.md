@@ -25,7 +25,9 @@ flowchart LR
     recon -->|settlement statement<br/>HTTP| ledger
 ```
 
-Loki and Grafana run alongside for logs (Grafana on `:3000`).
+Loki and Grafana (on `:3000`) run alongside, with Loki already a Grafana data
+source. Nothing ships logs to Loki yet; that needs a collector such as
+Grafana Alloy.
 
 ## Quickstart
 

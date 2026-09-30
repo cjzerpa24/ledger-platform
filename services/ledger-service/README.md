@@ -19,8 +19,8 @@ php-fpm + nginx image.
 From the repo root:
 
 ```bash
-make up-ledger-service   # postgres, redis, the API on :8081 and the outbox relay
-make install             # composer install
+make up-ledger-service   # postgres, redis, loki, grafana, the API on :8081 and the outbox relay
+make install             # composer install, plus a local APP_SECRET
 make migrate             # schema plus one settlement account per currency
 make seed                # optional demo accounts (runs once)
 make check               # php-cs-fixer, PHPStan level 9, PHPUnit
@@ -58,8 +58,9 @@ ledger, and every currency always sums to zero.
 4. A customer balance never goes below zero.
 
 `make verify` (`ledger:verify-balances`) checks 2 and 3 against the database
-and exits 1 on any mismatch. The integration and concurrency suites assert
-all four after every scenario.
+and exits 1 on any mismatch. The invariant, seed and overdraw tests run the
+same check, and the unit and integration suites pin 1 and 4 at the domain
+level.
 
 ## Concurrency and idempotency
 
@@ -141,7 +142,7 @@ in a transaction that is rolled back (DAMA), except the concurrency suite.
 |---|---|
 | `tests/Unit` | money parsing and formatting edge cases, and the account, journal entry and transfer rules |
 | `tests/Integration` | repositories and locking, the outbox written with the postings, the relay, statements over date boundaries, the balance invariants and the demo seed |
-| `tests/Functional` | every endpoint over HTTP, including idempotent replay and conflict, malformed amounts and every problem type |
+| `tests/Functional` | every endpoint over HTTP, including idempotent replay and conflict, malformed amounts and the problem responses (`account-not-active` is covered at integration level, as nothing can freeze an account over HTTP yet) |
 | `tests/Concurrency` | real parallel PHP processes: no overdraw, no deadlock, one transfer per idempotency key |
 
 ## Configuration

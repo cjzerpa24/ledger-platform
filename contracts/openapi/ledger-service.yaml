@@ -12,9 +12,6 @@ info:
 
     There is no authentication in stage 1 (ADR 0004): run it behind a gateway
     or on a private network.
-  license:
-    name: MIT
-    identifier: MIT
 servers:
   - url: http://localhost:8081
     description: docker compose (make up-ledger-service)
@@ -71,6 +68,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AccountView' }
         '400': { $ref: '#/components/responses/MalformedRequest' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '422':
           description: '`validation-failed` or `unsupported-currency`.'
           content:
@@ -109,10 +107,13 @@ paths:
         '201': { $ref: '#/components/responses/TransferCreated' }
         '200': { $ref: '#/components/responses/TransferReplayed' }
         '400': { $ref: '#/components/responses/MalformedRequest' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '422':
-          description: '`validation-failed`, `invalid-amount` or `account-not-active`.'
+          description: >-
+            `validation-failed`, `invalid-amount`, `account-not-active`, or
+            `same-account-transfer` when `{id}` is the settlement account.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -134,10 +135,14 @@ paths:
         '201': { $ref: '#/components/responses/TransferCreated' }
         '200': { $ref: '#/components/responses/TransferReplayed' }
         '400': { $ref: '#/components/responses/MalformedRequest' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '422':
-          description: '`validation-failed`, `invalid-amount`, `insufficient-funds` or `account-not-active`.'
+          description: >-
+            `validation-failed`, `invalid-amount`, `insufficient-funds`,
+            `account-not-active`, or `same-account-transfer` when `{id}` is the
+            settlement account.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
@@ -158,6 +163,7 @@ paths:
         '201': { $ref: '#/components/responses/TransferCreated' }
         '200': { $ref: '#/components/responses/TransferReplayed' }
         '400': { $ref: '#/components/responses/MalformedRequest' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/IdempotencyConflict' }
         '422':
@@ -262,7 +268,14 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     NotFound:
-      description: '`account-not-found` or `transfer-not-found`.'
+      description: >-
+        `account-not-found` or `transfer-not-found`; an id that is not a UUID
+        does not match the route and returns `about:blank`.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    UnsupportedMediaType:
+      description: The body is not `application/json` (`type` is `about:blank`).
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -284,7 +297,6 @@ components:
 
     OpenAccountRequest:
       type: object
-      additionalProperties: false
       required: [name, currency]
       properties:
         name: { type: string, minLength: 1, maxLength: 120, example: Alice }
@@ -295,14 +307,12 @@ components:
           example: USD
     FundsRequest:
       type: object
-      additionalProperties: false
       required: [amount]
       properties:
         amount: { $ref: '#/components/schemas/Amount' }
         description: { type: [string, 'null'], maxLength: 255 }
     TransferRequest:
       type: object
-      additionalProperties: false
       required: [sourceAccountId, destinationAccountId, amount]
       properties:
         sourceAccountId: { type: string, format: uuid }

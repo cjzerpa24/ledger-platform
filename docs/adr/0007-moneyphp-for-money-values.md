@@ -17,8 +17,8 @@ subtly wrong.
 - Doctrine maps money as two scalar columns (`*_minor` bigint and a
   `currency` string) rather than a custom type or embeddable; entities build
   `Money` in their getters.
-- `SupportedCurrencies` restricts MoneyPHP's ISO list to the five supported
-  currencies, and the domain raises `CurrencyMismatch` before any operation
+- `SupportedCurrencies` is its own MoneyPHP `CurrencyList` of the five
+  supported currencies and their decimals, rejecting any other code, and the domain raises `CurrencyMismatch` before any operation
   that mixes currencies, instead of relying on MoneyPHP's generic exception.
 - `MoneyParser` and `MoneyFormatter` are static helpers around MoneyPHP's
   decimal parser and formatter.
