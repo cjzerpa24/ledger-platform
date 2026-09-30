@@ -1,0 +1,48 @@
+name: ledger-service
+
+on:
+  push:
+    paths: ['services/ledger-service/**', 'contracts/**', '.github/workflows/ledger-service.yml']
+  pull_request:
+    paths: ['services/ledger-service/**', 'contracts/**', '.github/workflows/ledger-service.yml']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ledger-service
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: ledger
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ledger -d ledger"
+          --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+    env:
+      DATABASE_URL: postgresql://ledger:ledger@127.0.0.1:5432/ledger?serverVersion=16&charset=utf8
+      LEDGER_EVENTS_TRANSPORT_DSN: redis://127.0.0.1:6379/ledger_events?serializer=0&auto_setup=false&delete_after_ack=false&stream_max_entries=100000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: pdo_pgsql, intl, bcmath, redis, pcntl
+          ini-values: date.timezone=UTC
+          coverage: none
+      - uses: ramsey/composer-install@v3
+        with:
+          working-directory: services/ledger-service
+      - run: php bin/console lint:container
+      - run: php bin/console cache:warmup --env=dev
+      - run: php bin/console doctrine:database:create --if-not-exists --env=test
+      - run: php bin/console doctrine:migrations:migrate --no-interaction --env=test
+      - run: php bin/console doctrine:schema:validate --env=test
+      - run: composer check

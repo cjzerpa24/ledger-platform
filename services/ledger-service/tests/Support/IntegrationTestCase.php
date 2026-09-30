@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Tests\Support;
 
 use Doctrine\DBAL\Connection;
+use Symfony\Bundle\FrameworkBundle\Console\Application;
+use Symfony\Component\Console\Tester\CommandTester;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Test\KernelTestCase;
 
@@ -47,5 +49,13 @@ abstract class IntegrationTestCase extends KernelTestCase
         self::assertIsNumeric($value, \sprintf('Expected a number from: %s', $sql));
 
         return (int) $value;
+    }
+
+    protected function command(string $name): CommandTester
+    {
+        $kernel = self::$kernel;
+        \assert(null !== $kernel);
+
+        return new CommandTester(new Application($kernel)->find($name));
     }
 }

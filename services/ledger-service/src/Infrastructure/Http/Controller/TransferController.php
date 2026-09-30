@@ -68,11 +68,13 @@ final class TransferController extends AbstractController
 
     private function respond(PostTransferResult $result): JsonResponse
     {
-        $headers = ['Location' => $this->generateUrl('transfer_show', ['id' => $result->transfer->id])];
+        // Location only on 201: PHP's SAPI turns a 200 carrying Location into a 302.
         if ($result->replayed) {
-            $headers['Idempotent-Replayed'] = 'true';
+            return $this->json($result->transfer, Response::HTTP_OK, ['Idempotent-Replayed' => 'true']);
         }
 
-        return $this->json($result->transfer, $result->replayed ? Response::HTTP_OK : Response::HTTP_CREATED, $headers);
+        return $this->json($result->transfer, Response::HTTP_CREATED, [
+            'Location' => $this->generateUrl('transfer_show', ['id' => $result->transfer->id]),
+        ]);
     }
 }

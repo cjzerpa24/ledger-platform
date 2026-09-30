@@ -13,3 +13,8 @@ parameters:
         -
             identifier: method.unused
             path: src/Kernel.php
+        # The worker boots the test kernel, where App services are public
+        # (PublicAppServicesForTestsPass); PHPStan only sees the dev container.
+        -
+            identifier: symfonyContainer.privateService
+            path: tests/Concurrency/transfer_worker.php

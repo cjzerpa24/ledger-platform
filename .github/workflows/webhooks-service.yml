@@ -1,0 +1,48 @@
+name: webhooks-service
+
+on:
+  push:
+    paths: ['services/webhooks-service/**', 'contracts/**', '.github/workflows/webhooks-service.yml']
+  pull_request:
+    paths: ['services/webhooks-service/**', 'contracts/**', '.github/workflows/webhooks-service.yml']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/webhooks-service
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledger
+          POSTGRES_PASSWORD: ledger
+          POSTGRES_DB: webhooks_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ledger -d webhooks_test"
+          --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ledger:ledger@127.0.0.1:5432/webhooks_test
+      TEST_DATABASE_URL: postgresql://ledger:ledger@127.0.0.1:5432/webhooks_test
+      TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      CONTRACTS_DIR: ${{ github.workspace }}/contracts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: services/webhooks-service/package-lock.json
+      - run: npm ci
+      # `npm run check` does not generate the client; lint and typecheck need it.
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: npm run check

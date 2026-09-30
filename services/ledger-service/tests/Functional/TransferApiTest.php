@@ -38,6 +38,8 @@ final class TransferApiTest extends ApiTestCase
 
         self::assertSame(200, $second->getStatusCode());
         self::assertSame('true', $second->headers->get('Idempotent-Replayed'));
+        // Under PHP-FPM a Location header turns a 200 into a 302; it belongs to 201 only.
+        self::assertFalse($second->headers->has('Location'));
         self::assertSame($this->json($first), $this->json($second));
         self::assertSame('100.00', $this->balance($alice));
     }
