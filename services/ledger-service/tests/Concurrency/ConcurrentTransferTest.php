@@ -8,39 +8,35 @@ use App\Application\Account\OpenAccountCommand;
 use App\Application\Account\OpenAccountHandler;
 use App\Application\Transfer\RecordDepositCommand;
 use App\Application\Transfer\RecordDepositHandler;
+use App\Application\Transfer\TransferMoneyCommand;
+use App\Application\Transfer\TransferMoneyHandler;
 use App\Infrastructure\Persistence\Doctrine\BalanceVerifier;
 use App\Tests\Support\IntegrationTestCase;
 use DAMA\DoctrineTestBundle\Doctrine\DBAL\StaticDriver;
+use Doctrine\DBAL\ArrayParameterType;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Uid\Uuid;
 
 /**
  * Runs real parallel PHP processes against PostgreSQL. Fixtures are committed
- * (outside DAMA's per-test rollback) and removed again in tearDown().
+ * (outside DAMA's per-test rollback) and purged in setUp() and tearDown(),
+ * so an interrupted run cannot leave the test database dirty.
  */
 final class ConcurrentTransferTest extends IntegrationTestCase
 {
-    /** @var list<string> */
-    private array $accountIds = [];
+    /** Owner marker: every account this test commits carries this name. */
+    private const string MARKER = 'Concurrent (test)';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // A killed run skips tearDown(); clean up whatever it committed.
+        $this->purgeFixtures();
+    }
 
     protected function tearDown(): void
     {
-        $ids = $this->accountIds;
-        if ([] !== $ids) {
-            $connection = $this->connection();
-            $params = ['ids' => $ids];
-            $types = ['ids' => \Doctrine\DBAL\ArrayParameterType::STRING];
-            $connection->executeStatement('DELETE FROM outbox_messages WHERE aggregate_id IN (SELECT id FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids)) OR aggregate_id IN (:ids)', $params, $types);
-            $connection->executeStatement('DELETE FROM postings WHERE journal_entry_id IN (SELECT journal_entry_id FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids))', $params, $types);
-            $connection->executeStatement('DELETE FROM journal_entries WHERE id IN (SELECT journal_entry_id FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids))', $params, $types);
-            $connection->executeStatement('DELETE FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids)', $params, $types);
-            $connection->executeStatement('DELETE FROM accounts WHERE id IN (:ids)', $params, $types);
-            $connection->executeStatement(
-                "UPDATE accounts s SET balance_minor = COALESCE((SELECT SUM(CASE WHEN p.direction = 'credit' THEN p.amount_minor ELSE -p.amount_minor END) FROM postings p WHERE p.account_id = s.id), 0) WHERE s.type = 'settlement'",
-            );
-            StaticDriver::commit();
-            StaticDriver::beginTransaction();
-        }
+        $this->purgeFixtures();
         parent::tearDown();
     }
 
@@ -93,15 +89,54 @@ final class ConcurrentTransferTest extends IntegrationTestCase
         self::assertSame(9000, $this->balanceMinor($source));
     }
 
+    public function testLeftoversOfAnInterruptedRunArePurged(): void
+    {
+        // What a killed run leaves behind: committed accounts nobody tracks, and a transfer holding 'same-key'.
+        $source = $this->service(OpenAccountHandler::class)->handle(new OpenAccountCommand(self::MARKER, 'USD'))->id;
+        $destination = $this->service(OpenAccountHandler::class)->handle(new OpenAccountCommand(self::MARKER, 'USD'))->id;
+        $this->service(RecordDepositHandler::class)->handle(new RecordDepositCommand(Uuid::fromString($source), '10.00', null, 'fund-' . $source));
+        $this->service(TransferMoneyHandler::class)->handle(new TransferMoneyCommand(Uuid::fromString($source), Uuid::fromString($destination), '1.00', null, 'same-key'));
+        $this->commitFixtures();
+
+        $this->purgeFixtures();
+
+        self::assertSame(0, $this->fetchInt('SELECT COUNT(*) FROM accounts WHERE name = :name', ['name' => self::MARKER]));
+        self::assertSame(0, $this->fetchInt("SELECT COUNT(*) FROM transfers WHERE idempotency_key = 'same-key'"));
+        self::assertTrue($this->service(BalanceVerifier::class)->verify()->isClean());
+    }
+
     private function fundedAccount(?string $deposit): string
     {
-        $id = $this->service(OpenAccountHandler::class)->handle(new OpenAccountCommand('Concurrent', 'USD'))->id;
-        $this->accountIds[] = $id;
+        $id = $this->service(OpenAccountHandler::class)->handle(new OpenAccountCommand(self::MARKER, 'USD'))->id;
         if (null !== $deposit) {
             $this->service(RecordDepositHandler::class)->handle(new RecordDepositCommand(Uuid::fromString($id), $deposit, null, 'fund-' . $id));
         }
 
         return $id;
+    }
+
+    /** Removes every committed row owned by this test's accounts, then commits. */
+    private function purgeFixtures(): void
+    {
+        $connection = $this->connection();
+        $ids = $connection->fetchFirstColumn("SELECT id FROM accounts WHERE type = 'customer' AND name = :name", ['name' => self::MARKER]);
+        if ([] === $ids) {
+            return;
+        }
+        $params = ['ids' => $ids];
+        $types = ['ids' => ArrayParameterType::STRING];
+        $owned = 'SELECT journal_entry_id FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids)';
+        $connection->executeStatement('DELETE FROM outbox_messages WHERE aggregate_id IN (SELECT id FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids)) OR aggregate_id IN (:ids)', $params, $types);
+        $connection->executeStatement("DELETE FROM postings WHERE journal_entry_id IN ({$owned})", $params, $types);
+        $connection->executeStatement("DELETE FROM journal_entries WHERE id IN ({$owned})", $params, $types);
+        $connection->executeStatement('DELETE FROM transfers WHERE source_account_id IN (:ids) OR destination_account_id IN (:ids)', $params, $types);
+        $connection->executeStatement('DELETE FROM accounts WHERE id IN (:ids)', $params, $types);
+        // The deleted deposits also moved the USD settlement account; recompute only that cache.
+        $connection->executeStatement(
+            "UPDATE accounts s SET balance_minor = COALESCE((SELECT SUM(CASE WHEN p.direction = 'credit' THEN p.amount_minor ELSE -p.amount_minor END) FROM postings p WHERE p.account_id = s.id), 0) WHERE s.type = 'settlement' AND s.currency = 'USD'",
+        );
+        StaticDriver::commit();
+        StaticDriver::beginTransaction();
     }
 
     private function commitFixtures(): void

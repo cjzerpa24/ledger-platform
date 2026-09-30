@@ -17,7 +17,7 @@ new Dotenv()->bootEnv(dirname(__DIR__, 2) . '/.env');
 
 [, $source, $destination, $amount, $key, $startAt] = $argv;
 
-$kernel = new Kernel('test', false);
+$kernel = new Kernel('test', true);
 $kernel->boot();
 // App services are public in the test environment (PublicAppServicesForTestsPass).
 $handler = $kernel->getContainer()->get(TransferMoneyHandler::class);
