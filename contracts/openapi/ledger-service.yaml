@@ -1,0 +1,402 @@
+openapi: 3.1.0
+info:
+  title: ledger-service
+  version: 1.0.0
+  summary: Double-entry ledger API (stage 1)
+  description: |
+    Accounts, deposits, withdrawals, transfers and statements. Amounts are
+    decimal strings in the account currency's precision ("50.00", "1200" for
+    JPY); they are never JSON numbers. Every error is RFC 9457
+    `application/problem+json` with a stable `type` such as
+    `urn:ledger:problem:insufficient-funds`.
+
+    There is no authentication in stage 1 (ADR 0004): run it behind a gateway
+    or on a private network.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8081
+    description: docker compose (make up-ledger-service)
+
+# No authentication in stage 1 (ADR 0004).
+security: []
+
+tags:
+  - name: accounts
+    description: Customer accounts and their cached balances.
+  - name: money movement
+    description: Deposits, withdrawals and transfers, all idempotent.
+  - name: statements
+    description: Postings with a running balance over a date range.
+  - name: operations
+    description: Health.
+
+paths:
+  /health:
+    get:
+      tags: [operations]
+      operationId: health
+      summary: Liveness and database check
+      responses:
+        '200':
+          description: The service and its database are up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: The database is unreachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /accounts:
+    post:
+      tags: [accounts]
+      operationId: openAccount
+      summary: Open a customer account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OpenAccountRequest' }
+      responses:
+        '201':
+          description: The account was opened with a zero balance.
+          headers:
+            Location:
+              description: The account's URL.
+              schema: { type: string, example: /accounts/0199b2c4-6d1e-7a10-8b2c-3d4e5f607182 }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountView' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '422':
+          description: '`validation-failed` or `unsupported-currency`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /accounts/{id}:
+    get:
+      tags: [accounts]
+      operationId: getAccount
+      summary: Show an account and its cached balance
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: The account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /accounts/{id}/deposits:
+    post:
+      tags: [money movement]
+      operationId: recordDeposit
+      summary: Move money into an account from the settlement account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FundsRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TransferCreated' }
+        '200': { $ref: '#/components/responses/TransferReplayed' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '422':
+          description: '`validation-failed`, `invalid-amount` or `account-not-active`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /accounts/{id}/withdrawals:
+    post:
+      tags: [money movement]
+      operationId: recordWithdrawal
+      summary: Move money out of an account to the settlement account
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FundsRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TransferCreated' }
+        '200': { $ref: '#/components/responses/TransferReplayed' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '422':
+          description: '`validation-failed`, `invalid-amount`, `insufficient-funds` or `account-not-active`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /transfers:
+    post:
+      tags: [money movement]
+      operationId: transferMoney
+      summary: Move money between two customer accounts of the same currency
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TransferRequest' }
+      responses:
+        '201': { $ref: '#/components/responses/TransferCreated' }
+        '200': { $ref: '#/components/responses/TransferReplayed' }
+        '400': { $ref: '#/components/responses/MalformedRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/IdempotencyConflict' }
+        '422':
+          description: >-
+            `validation-failed`, `invalid-amount`, `insufficient-funds`,
+            `currency-mismatch`, `same-account-transfer` or `account-not-active`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /transfers/{id}:
+    get:
+      tags: [money movement]
+      operationId: getTransfer
+      summary: Show a transfer, deposit or withdrawal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The transfer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TransferView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /accounts/{id}/statement:
+    get:
+      tags: [statements]
+      operationId: getStatement
+      summary: Postings with a running balance for a date range
+      description: >-
+        Both dates are inclusive and interpreted in UTC. Without `to`, the
+        statement ends today; without `from`, it starts 30 days before `to`.
+        A range may cover at most 366 days.
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+        - name: from
+          in: query
+          schema: { type: string, format: date, example: '2026-03-01' }
+        - name: to
+          in: query
+          schema: { type: string, format: date, example: '2026-03-31' }
+      responses:
+        '200':
+          description: The statement.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatementView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: '`validation-failed` (a date not in YYYY-MM-DD) or `invalid-statement-period`.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+components:
+  parameters:
+    AccountId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Client-chosen key, 1–255 characters. The same key with the same request
+        replays the original response (200); with a different request it is a
+        409 `idempotency-conflict`. Rejected requests are not stored, so
+        retrying their key re-evaluates the request.
+      schema: { type: string, minLength: 1, maxLength: 255 }
+
+  headers:
+    IdempotentReplayed:
+      description: Present on a 200 replay of an earlier request.
+      schema: { type: string, const: 'true' }
+
+  responses:
+    TransferCreated:
+      description: The money moved.
+      headers:
+        Location:
+          description: The transfer's URL.
+          schema: { type: string, example: /transfers/0199b2c4-6d1e-7a10-8b2c-3d4e5f607182 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TransferView' }
+    TransferReplayed:
+      description: The Idempotency-Key was already used with this exact request; the original transfer is returned and nothing moves again.
+      headers:
+        Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TransferView' }
+    MalformedRequest:
+      description: Malformed JSON, or a missing or over-long `Idempotency-Key` (`type` is `about:blank`).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: '`account-not-found` or `transfer-not-found`.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    IdempotencyConflict:
+      description: '`idempotency-conflict`: the key was used with a different request.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Amount:
+      type: string
+      pattern: '^\d+(\.\d+)?$'
+      description: Positive decimal string with at most the currency's decimals (2, or 0 for JPY).
+      examples: ['125.50', '1200']
+    Currency:
+      type: string
+      enum: [USD, EUR, GBP, TZS, JPY]
+
+    OpenAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [name, currency]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, example: Alice }
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: ISO-4217 code; unsupported codes are a 422 `unsupported-currency`.
+          example: USD
+    FundsRequest:
+      type: object
+      additionalProperties: false
+      required: [amount]
+      properties:
+        amount: { $ref: '#/components/schemas/Amount' }
+        description: { type: [string, 'null'], maxLength: 255 }
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceAccountId, destinationAccountId, amount]
+      properties:
+        sourceAccountId: { type: string, format: uuid }
+        destinationAccountId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/Amount' }
+        description: { type: [string, 'null'], maxLength: 255 }
+
+    AccountView:
+      type: object
+      required: [id, name, type, currency, status, balance, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [customer, settlement] }
+        currency: { $ref: '#/components/schemas/Currency' }
+        status: { type: string, enum: [active, frozen, closed] }
+        balance:
+          type: string
+          pattern: '^-?\d+(\.\d+)?$'
+          description: Cached balance; negative only on settlement accounts.
+        createdAt: { type: string, format: date-time }
+    TransferView:
+      type: object
+      required: [id, kind, sourceAccountId, destinationAccountId, amount, currency, description, status, journalEntryId, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [internal, deposit, withdrawal] }
+        sourceAccountId: { type: string, format: uuid }
+        destinationAccountId: { type: string, format: uuid }
+        amount: { $ref: '#/components/schemas/Amount' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        description: { type: [string, 'null'] }
+        status: { type: string, enum: [completed] }
+        journalEntryId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+    StatementView:
+      type: object
+      required: [accountId, currency, from, to, openingBalance, closingBalance, lines]
+      properties:
+        accountId: { type: string, format: uuid }
+        currency: { $ref: '#/components/schemas/Currency' }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        openingBalance: { type: string, pattern: '^-?\d+(\.\d+)?$' }
+        closingBalance: { type: string, pattern: '^-?\d+(\.\d+)?$' }
+        lines:
+          type: array
+          description: Ordered by (occurredAt, postingId).
+          items: { $ref: '#/components/schemas/StatementLine' }
+    StatementLine:
+      type: object
+      required: [postingId, occurredAt, description, transferId, direction, amount, balanceAfter]
+      properties:
+        postingId: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        description: { type: [string, 'null'] }
+        transferId: { type: string, format: uuid }
+        direction:
+          type: string
+          enum: [credit, debit]
+          description: credit increases the account's balance, debit decreases it.
+        amount: { $ref: '#/components/schemas/Amount' }
+        balanceAfter: { type: string, pattern: '^-?\d+(\.\d+)?$' }
+
+    Health:
+      type: object
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        checks:
+          type: object
+          required: [database]
+          properties:
+            database: { type: string, enum: [ok, down] }
+
+    Problem:
+      type: object
+      description: RFC 9457 problem details.
+      required: [type, title, status, detail]
+      properties:
+        type:
+          type: string
+          description: '`urn:ledger:problem:<kebab-name>` for known problems, `about:blank` otherwise.'
+          examples: ['urn:ledger:problem:insufficient-funds', 'about:blank']
+        title: { type: string, example: Insufficient Funds }
+        status: { type: integer, example: 422 }
+        detail: { type: string }
+        instance: { type: string, description: The request path., example: /transfers }
+        violations:
+          type: array
+          description: Only on `validation-failed`.
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string, example: amount }
+              message: { type: string }

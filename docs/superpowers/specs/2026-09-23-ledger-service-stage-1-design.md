@@ -538,3 +538,14 @@ customer service exists.
   snapshots or PDFs.
 - **Not planned yet:** FX and cross-currency transfers, and a FrankenPHP
   runtime experiment.
+
+## 15. Deviations recorded during implementation
+
+- Settlement accounts are seeded by a data migration (fixed UUIDs, ISO numeric suffix) instead of being created on first use; the race-safe creation path in §6.2 is no longer needed and a test asserts every supported currency has one.
+- Partial indexes were replaced by plain indexes (`accounts(type, currency)`, `outbox_messages(published_at, occurred_at)`) to keep `doctrine:schema:validate` stable.
+- `AccountReader` was dropped: `GetAccountHandler` maps the entity via `AccountRepository::get()`. Statements keep the DBAL `StatementReader`.
+- `MoneyParser` and `MoneyFormatter` are stateless static helpers rather than injected services.
+- Unique-constraint races surface as `App\Application\Port\DuplicateRecord`, thrown by `TransactionManager`, so the application layer never imports DBAL exceptions.
+- The `ledger_events` DSN carries `serializer=0&auto_setup=false&delete_after_ack=false&stream_max_entries=100000`. phpredis defaults to PHP serialization of the stream field, which the Node `webhooks-service` cannot read; with it off, each entry is `message = {"body": "<envelope JSON>", "headers": {...}}`. The ledger only produces, so it creates no consumer group of its own: Messenger's auto-setup adds a `symfony` group and then refuses to publish once another service's group exists. The stream is capped at roughly 100k entries. `IntegrationEvent`'s public properties are exactly the envelope fields so `body` is the envelope that `contracts/events/*.v1.schema.json` describes (webhook-service spec §8.1). `phpunit.dist.xml` forces `in-memory://`, because the compose container's real env var would otherwise override `.env.test`.
+- The application layer reads time through `App\Application\Port\Clock`, implemented by `SecondPrecisionClock`, which drops sub-seconds. DBAL 4 stores `TIMESTAMP(0)` on PostgreSQL, so a replayed transfer otherwise reported a different `createdAt` than the first response. Same-second ordering relies on UUIDv7 ids.
+- Money-moving endpoints send `Location` only with `201 Created`. PHP's SAPI turns any `200` that carries a `Location` header into a `302`, so a replay (`200` + `Idempotent-Replayed: true`) must not send it.
