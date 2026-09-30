@@ -59,8 +59,9 @@ logs-%: ## Follow logs of one container, e.g. make logs-ledger-service
 sh: ## Shell into the ledger-service container
 	$(EXEC) sh
 
-install: ## Install ledger-service PHP dependencies
+install: ## Install ledger-service PHP dependencies and a local dev APP_SECRET
 	$(EXEC) composer install
+	$(EXEC) sh -c 'test -s .env.dev.local || echo "APP_SECRET=$$(php -r "echo bin2hex(random_bytes(16));")" > .env.dev.local'
 
 migrate: ## Run ledger-service database migrations
 	$(CONSOLE) doctrine:migrations:migrate --no-interaction --allow-no-migration
