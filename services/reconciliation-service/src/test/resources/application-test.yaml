@@ -1,0 +1,6 @@
+spring:
+  datasource:
+    url: ${TEST_DATASOURCE_URL:jdbc:postgresql://localhost:5433/reconciliation_test}
+reconciliation:
+  ledger-base-url: http://ledger.invalid
+  ledger-timeout-ms: 500

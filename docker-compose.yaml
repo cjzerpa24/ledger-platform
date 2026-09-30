@@ -74,8 +74,28 @@ services:
       redis:
         condition: service_healthy
 
-  # reconciliation-service is added here with `profiles: ["reconciliation-service"]`
-  # once its Dockerfile exists.
+  reconciliation-service:
+    build:
+      context: ./services/reconciliation-service
+      target: dev
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    profiles: ["reconciliation-service"]
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./services/reconciliation-service:/app
+      - recon-m2:/home/app/.m2
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reconciliation
+      SPRING_DATASOURCE_USERNAME: ledger
+      SPRING_DATASOURCE_PASSWORD: ledger
+      TEST_DATASOURCE_URL: jdbc:postgresql://postgres:5432/reconciliation_test
+      LEDGER_BASE_URL: http://ledger-service
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # --- Shared infrastructure -------------------------------------------------
 
@@ -131,3 +151,4 @@ volumes:
   redisdata:
   lokidata:
   grafanadata:
+  recon-m2:
